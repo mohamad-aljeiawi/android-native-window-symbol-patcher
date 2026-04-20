@@ -22,7 +22,7 @@
   <img alt="C%2B%2B" src="https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus&logoColor=white">
 </p>
 
-> **NOTE:** <span style="color:red">This project was written by my friend to solve this problem on a real shipping app. The complete open-source source is [on GitHub](https://github.com/mohamad-aljeiawi/cping/tree/main/cping-memory-pubg).</span>
+> **NOTE:** <span style="color:red">The complete open-source source is [on GitHub](https://github.com/mohamad-aljeiawi/cping/tree/main/cping-memory-pubg).</span>
 
 ---
 
