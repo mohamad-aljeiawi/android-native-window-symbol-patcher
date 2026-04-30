@@ -1346,13 +1346,15 @@ struct ApiTableDescriptor {
                 "3gui13LayerMetadataEPj"},
 
             ApiDescriptor{
-                11, 14,
+                11, 14, 15,
                 &apis::libgui::SurfaceComposerClient::Api.MirrorSurface,
                 "_ZN7android21SurfaceComposerClient13mirrorSurfaceEPNS_"
                 "14SurfaceControlE"},
+
             ApiDescriptor{
-                15, UINT_MAX,
-                &apis::libgui::SurfaceComposerClient::Api.MirrorSurfaceWithParent,
+                16, UINT_MAX,
+                &apis::libgui::SurfaceComposerClient::Api
+                     .MirrorSurfaceWithParent,
                 "_ZN7android21SurfaceComposerClient13mirrorSurfaceEPNS_"
                 "14SurfaceControlES2_"},
 
