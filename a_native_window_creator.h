@@ -1916,7 +1916,15 @@
      m_cachedSurfaceControl.erase(nativeWindow);
    }
  
-   static void ProcessMirrorDisplay() {
+   // renderScalePct is the overlay's live render-resolution percent (10..100).
+   // A SurfaceFlinger mirror clones the SOURCE LAYER'S BUFFER, not its
+   // upscaled on-screen presentation, so when the overlay renders at a reduced
+   // buffer the clone's intrinsic content is that smaller buffer. The transform
+   // must treat the source as builtinDisplay*pct/100, or the clone is
+   // under-scaled and lands in the top-left fraction of the capture frame
+   // instead of filling it edge to edge.
+   static void ProcessMirrorDisplay(int32_t renderScalePct = 100) {
+     renderScalePct = std::clamp<int32_t>(renderScalePct, 10, 100);
      static std::chrono::steady_clock::time_point lastTime{};
  
      if (14 > anative_window_creator::detail::compat::SystemVersion) {
@@ -1999,6 +2007,17 @@
        }
      }
  
+     // A runtime render-scale change resizes the source buffer, so every
+     // cached transform is now sized for the wrong resolution. Drop the
+     // applied-scale cache so Pass 2 recomputes each mirror's matrix against
+     // the new source size. The mirror SURFACES themselves are untouched —
+     // only the scale/position matrix is re-applied (cheap, no reallocation).
+     static int32_t lastAppliedRenderScalePct = -1;
+     if (renderScalePct != lastAppliedRenderScalePct) {
+       cachedLayerStackScales.clear();
+       lastAppliedRenderScalePct = renderScalePct;
+     }
+ 
      // Pass 2: mirror and transform every virtual display stack (stack != 0).
      for (auto& displayInfo : dumpDisplayInfos) {
        if (0 == displayInfo.currentLayerStack) {
@@ -2026,37 +2045,49 @@
            cachedLayerStackMirrorSurfaces.contains(
                displayInfo.currentLayerStack)) {
          if (!cachedLayerStackScales.contains(displayInfo.currentLayerStack)) {
-           LogInfo("[=] Display layerstack transform[%d x %d]: %u -> %d x %d",
-                   builtinDisplayWidth, builtinDisplayHeight,
-                   displayInfo.currentLayerStack,
-                   displayInfo.currentLayerStackRect.right,
-                   displayInfo.currentLayerStackRect.bottom);
+           // Forced to logcat in release too (see note at the transform
+           // print below): shows source builtin dims -> target virtual rect.
+           __android_log_print(
+               ANDROID_LOG_INFO, LOGTAG,
+               "[=] Display layerstack transform[%d x %d @ %d%%]: %u -> %d x %d",
+               builtinDisplayWidth, builtinDisplayHeight, renderScalePct,
+               displayInfo.currentLayerStack,
+               displayInfo.currentLayerStackRect.right,
+               displayInfo.currentLayerStackRect.bottom);
  
            auto& composerInstance = GetComposerInstance();
            auto& mirrorLayers =
                cachedLayerStackMirrorSurfaces.at(displayInfo.currentLayerStack);
            // Build the scale+rotation transform. CalcMirrorLayerTransform
-           // takes (target, source): the builtin display is the "source"
-           // content (the clone reflects it at builtin resolution) and the
-           // virtual display rect is the "target" frame the clone is scaled
-           // into.  The transform is applied to the clone itself (see
-           // MirrorSurface), not the root container.
+           // takes (target, source): the virtual display rect is the "target"
+           // frame the clone is scaled into. The "source" is the clone's
+           // intrinsic content size — the overlay's render BUFFER, which is
+           // builtinDisplay*renderScalePct/100 (the clone reflects the buffer,
+           // not the full-screen-upscaled layer). Using the full builtin size
+           // here would under-scale the clone whenever the overlay renders
+           // below 100%, leaving it in the top-left fraction of the frame.
+           // The transform is applied to the clone itself (see MirrorSurface),
+           // not the root container.
+           const float renderScale = static_cast<float>(renderScalePct) / 100.f;
            const auto t =
                anative_window_creator::detail::CalcMirrorLayerTransform(
                    static_cast<float>(displayInfo.currentLayerStackRect.right),
                    static_cast<float>(displayInfo.currentLayerStackRect.bottom),
-                   static_cast<float>(builtinDisplayWidth),
-                   static_cast<float>(builtinDisplayHeight));
+                   static_cast<float>(builtinDisplayWidth) * renderScale,
+                   static_cast<float>(builtinDisplayHeight) * renderScale);
  
            for (auto& mirrorLayer : mirrorLayers) {
              composerInstance.TransformSurface(mirrorLayer, t.dsdx, t.dtdx,
                                                t.dtdy, t.dsdy, t.offsetX,
                                                t.offsetY);
-             LogInfo(
-                 "[+] Transform mirror layer:%p rot=%d "
-                 "matrix=[%.3f,%.3f,%.3f,%.3f] pos=(%.1f,%.1f)",
-                 mirrorLayer.data, t.needs_rotation, t.dsdx, t.dtdx, t.dtdy,
-                 t.dsdy, t.offsetX, t.offsetY);
+             // Force this one line to logcat even in release builds, where
+             // LogInfo is stubbed to a no-op by native_window.cpp. Bypasses
+             // the macro with a direct call so no other AImGui logs return.
+             __android_log_print(ANDROID_LOG_INFO, LOGTAG,
+                                 "[+] Transform mirror layer:%p rot=%d "
+                                 "matrix=[%.3f,%.3f,%.3f,%.3f] pos=(%.1f,%.1f)",
+                                 mirrorLayer.data, t.needs_rotation, t.dsdx,
+                                 t.dtdx, t.dtdy, t.dsdy, t.offsetX, t.offsetY);
            }
            cachedLayerStackScales.emplace(displayInfo.currentLayerStack);
          }
