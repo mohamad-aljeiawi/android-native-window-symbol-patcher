@@ -406,6 +406,10 @@ struct ApiDescriptor {
   size_t maxVersion;
   void **storeToTarget;
   const char *apiSignature;
+  // When true, a failed resolve is tolerated (the pointer stays null) instead
+  // of throwing. Used for symbols whose presence varies across ROMs of the
+  // same OS version, where the caller selects an alternative at runtime.
+  bool optional = false;
 
   bool IsSupported(size_t currentVersion) const {
     return currentVersion >= minVersion && currentVersion <= maxVersion;
@@ -1164,11 +1168,17 @@ struct SurfaceComposerClient {
     transaction.SetLayerStack(mirrorRootSurface, layerStack);
     transaction.Apply(false, true);
 
-    // Android 15+ changed mirrorSurface() to accept an explicit parent.
-    // The returned mirror is already attached to `parent`, so the legacy
-    // reparent transaction becomes unnecessary on those versions.
+    // Android 16 added a mirrorSurface() overload taking an explicit parent;
+    // the returned mirror is already attached, so no reparent is needed. Some
+    // Android 16 ROMs (e.g. Red Magic NX799J) still ship only the legacy
+    // one-argument overload, so select by which symbol actually resolved
+    // rather than by the reported OS version.
+    const bool has_parent_overload =
+        nullptr !=
+        apis::libgui::SurfaceComposerClient::Api.MirrorSurfaceWithParent;
+
     types::StrongPointer<void> mirrorSurface;
-    if (compat::SystemVersion >= 15) {
+    if (has_parent_overload) {
       mirrorSurface =
           ApiInvoker<"SurfaceComposerClient::MirrorSurfaceWithParent">()(
               data, surface.data, mirrorRootSurface.data);
@@ -1183,7 +1193,7 @@ struct SurfaceComposerClient {
 
     transaction.SetLayerStack(mirrorSurface, layerStack);
     transaction.Show(mirrorSurface);
-    if (compat::SystemVersion < 15) {
+    if (!has_parent_overload) {
       transaction.Reparent(mirrorSurface, mirrorRootSurface);
     }
     transaction.Apply(false, true);
@@ -1345,18 +1355,26 @@ struct ApiTableDescriptor {
                 "7String8EjjiiRKNS_2spINS_7IBinderEEENS_"
                 "3gui13LayerMetadataEPj"},
 
+            // Legacy one-argument mirrorSurface(). Present on 11..15 and still
+            // shipped by some Android 16 ROMs (e.g. Red Magic NX799J) that
+            // lack the explicit-parent overload below, so allow it up to the
+            // latest version and tolerate its absence.
             ApiDescriptor{
-                11, 15,
+                11, UINT_MAX,
                 &apis::libgui::SurfaceComposerClient::Api.MirrorSurface,
                 "_ZN7android21SurfaceComposerClient13mirrorSurfaceEPNS_"
-                "14SurfaceControlE"},
+                "14SurfaceControlE",
+                true},
 
+            // Android 16 explicit-parent mirrorSurface(). Optional: ROMs that
+            // still expose only the legacy overload above fall back to it.
             ApiDescriptor{
                 16, UINT_MAX,
                 &apis::libgui::SurfaceComposerClient::Api
                      .MirrorSurfaceWithParent,
                 "_ZN7android21SurfaceComposerClient13mirrorSurfaceEPNS_"
-                "14SurfaceControlES2_"},
+                "14SurfaceControlES2_",
+                true},
 
             ApiDescriptor{
                 5, 9,
@@ -1564,11 +1582,13 @@ struct ApiResolver {
 
       *descriptor.storeToTarget =
           resolver.Resolve(libutils, descriptor.apiSignature);
-      if (nullptr == *descriptor.storeToTarget) {
+      if (nullptr == *descriptor.storeToTarget && !descriptor.optional) {
         LogError(
             "[!] Version[Android %zu] [libutils] failed to resolve symbol: %s",
             compat::SystemVersion, descriptor.apiSignature);
-        throw std::runtime_error("Failed to resolve symbol");
+        throw std::runtime_error(
+            std::string("Failed to resolve [libutils] symbol: ") +
+            descriptor.apiSignature);
       }
     }
 
@@ -1579,11 +1599,13 @@ struct ApiResolver {
 
       *descriptor.storeToTarget =
           resolver.Resolve(libgui, descriptor.apiSignature);
-      if (nullptr == *descriptor.storeToTarget) {
+      if (nullptr == *descriptor.storeToTarget && !descriptor.optional) {
         LogError(
             "[!] Version[Android %zu] [libgui] failed to resolve symbol: %s",
             compat::SystemVersion, descriptor.apiSignature);
-        throw std::runtime_error("Failed to resolve symbol");
+        throw std::runtime_error(
+            std::string("Failed to resolve [libgui] symbol: ") +
+            descriptor.apiSignature);
       }
     }
 
